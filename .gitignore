@@ -1,0 +1,4 @@
+*.ppm
+*.out
+build
+.vscode
