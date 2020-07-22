@@ -1,8 +1,6 @@
 #ifndef COLOR_H
 #define COLOR_H
 
-#include <iostream>
-
 #include "vec3.h"
 
 color correct_color(color pixel_color, int samples_per_pixel) {

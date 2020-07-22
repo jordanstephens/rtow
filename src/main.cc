@@ -77,6 +77,17 @@ hittable_list random_scene() {
   return world;
 }
 
+void write_color(std::ostream& out, color* c) {
+  out << static_cast<int>(256 * c->x()) << ' ' << static_cast<int>(256 * c->y())
+      << ' ' << static_cast<int>(256 * c->z()) << '\n';
+}
+
+void flush_buffer(std::ostream& out, std::vector<color>* buffer) {
+  for (color pixel : *buffer) {
+    write_color(out, &pixel);
+  }
+}
+
 void render(int width, int height, camera cam, hittable_list world, int samples,
             int max_depth) {
   std::cout << "P3\n" << width << ' ' << height << "\n255\n";
@@ -102,11 +113,7 @@ void render(int width, int height, camera cam, hittable_list world, int samples,
       }
     }
 
-    for (color pixel : buffer) {
-      std::cout << static_cast<int>(256 * pixel.x()) << ' '
-                << static_cast<int>(256 * pixel.y()) << ' '
-                << static_cast<int>(256 * pixel.z()) << '\n';
-    }
+    flush_buffer(std::cout, &buffer);
   }
 
   std::cerr << "\nDone." << std::endl;
