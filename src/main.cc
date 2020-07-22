@@ -1,5 +1,8 @@
+#include <omp.h>
+
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 #include "camera.h"
 #include "color.h"
@@ -74,6 +77,41 @@ hittable_list random_scene() {
   return world;
 }
 
+void render(int width, int height, camera cam, hittable_list world, int samples,
+            int max_depth) {
+  std::cout << "P3\n" << width << ' ' << height << "\n255\n";
+
+  omp_set_num_threads(8);
+  std::vector<color> buffer(width);
+
+  for (int j = height - 1; j >= 0; --j) {
+    std::cerr << "\rScanlines remaining: " << j << ' ' << std::flush;
+
+#pragma omp parallel shared(buffer)
+    {
+#pragma omp for
+      for (int i = 0; i < width; ++i) {
+        color pixel_color(0, 0, 0);
+        for (int s = 0; s < samples; ++s) {
+          auto u = (i + random_double()) / (width - 1);
+          auto v = (j + random_double()) / (height - 1);
+          ray r = cam.get_ray(u, v);
+          pixel_color += ray_color(r, world, max_depth);
+        }
+        buffer[i] = correct_color(pixel_color, samples);
+      }
+    }
+
+    for (color pixel : buffer) {
+      std::cout << static_cast<int>(256 * pixel.x()) << ' '
+                << static_cast<int>(256 * pixel.y()) << ' '
+                << static_cast<int>(256 * pixel.z()) << '\n';
+    }
+  }
+
+  std::cerr << "\nDone." << std::endl;
+}
+
 int main(int argc, char const* argv[]) {
   if (argc < 3) {
     std::cerr << "Usage: " << argv[0] << " <width>"
@@ -101,23 +139,7 @@ int main(int argc, char const* argv[]) {
 
   camera cam(lookfrom, lookat, vup, 20, aspect_ratio, aperture, dist_to_focus);
 
-  std::cout << "P3\n" << width << ' ' << height << "\n255\n";
-
-  for (int j = height - 1; j >= 0; --j) {
-    std::cerr << "\rScanlines remaining: " << j << ' ' << std::flush;
-    for (int i = 0; i < width; ++i) {
-      color pixel_color(0, 0, 0);
-      for (int s = 0; s < samples; ++s) {
-        auto u = (i + random_double()) / (width - 1);
-        auto v = (j + random_double()) / (height - 1);
-        ray r = cam.get_ray(u, v);
-        pixel_color += ray_color(r, world, max_depth);
-      }
-      write_color(std::cout, pixel_color, samples);
-    }
-  }
-
-  std::cerr << "\nDone." << std::endl;
+  render(width, height, cam, world, samples, max_depth);
 
   return 0;
 }

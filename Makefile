@@ -6,7 +6,7 @@ test: build
 
 .PHONY: build
 build:
-	g++ -pedantic -Wall -Wextra -o $(OUT) $(SRC)
+	g++ -fopenmp -pedantic -Wall -Wextra -o $(OUT) $(SRC)
 
 clean:
 	rm -f $(OUT)
