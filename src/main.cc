@@ -1,15 +1,24 @@
 #include <omp.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "camera.h"
 #include "color.h"
 #include "hittable_list.h"
 #include "material.h"
+#include "pingpong.h"
 #include "rtweekend.h"
 #include "sphere.h"
+
+const int MAX_DEPTH = 32;
+const int MAX_RETRIES = 10;
+const int WAIT_MS = 10;
 
 color ray_color(const ray& r, const hittable& world, int depth) {
   if (depth <= 0) {
@@ -77,63 +86,81 @@ hittable_list random_scene() {
   return world;
 }
 
-void write_color(std::ostream& out, color* c) {
-  out << static_cast<int>(256 * c->x()) << ' ' << static_cast<int>(256 * c->y())
-      << ' ' << static_cast<int>(256 * c->z()) << '\n';
-}
-
-void flush_buffer(std::ostream& out, std::vector<color>* buffer) {
-  for (color pixel : *buffer) {
-    write_color(out, &pixel);
+void flush_page(std::ostream& out, std::vector<color> buffer) {
+  std::stringstream page;
+  for (size_t i = 0; i < buffer.size(); i++) {
+    color pixel = buffer.at(i);
+    page << static_cast<int>(256 * pixel.x()) << ' '
+         << static_cast<int>(256 * pixel.y()) << ' '
+         << static_cast<int>(256 * pixel.z()) << '\n';
   }
+  out << page.str() << std::flush;
 }
 
 void render(int width, int height, camera cam, hittable_list world, int samples,
             int max_depth) {
   std::cout << "P3\n" << width << ' ' << height << "\n255\n";
 
-  omp_set_num_threads(8);
-  std::vector<color> buffer(width);
+  pingpong<color> buffer(width);
 
-  for (int j = height - 1; j >= 0; --j) {
-    std::cerr << "\rScanlines remaining: " << j << ' ' << std::flush;
+  for (int j = height - 1; j >= 0; j -= 2) {
+    std::cerr << "\rScanlines remaining: " << j + 1 << ' ' << std::flush;
 
-#pragma omp parallel shared(buffer)
+#pragma omp parallel shared(j, buffer)
     {
-#pragma omp for
-      for (int i = 0; i < width; ++i) {
+#pragma omp for schedule(dynamic)
+      for (int i = 0; i < width * 2; ++i) {
         color pixel_color(0, 0, 0);
+        auto x = i >= width ? i - width : i;
+        auto y = i >= width ? j - 1 : j;
+        auto page = int(i >= width);
         for (int s = 0; s < samples; ++s) {
-          auto u = (i + random_double()) / (width - 1);
-          auto v = (j + random_double()) / (height - 1);
+          auto u = (x + random_double()) / (width - 1);
+          auto v = (y + random_double()) / (height - 1);
           ray r = cam.get_ray(u, v);
           pixel_color += ray_color(r, world, max_depth);
         }
-        buffer[i] = correct_color(pixel_color, samples);
+        bool sealed = false;
+        for (int n = 0; n < MAX_RETRIES; n++) {
+          try {
+            sealed = buffer.set(page, x, correct_color(pixel_color, samples));
+            break;
+          } catch (const std::exception& e) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_MS));
+            if (n == MAX_RETRIES - 1) {
+              std::cerr << "\r" << e.what() << std::endl;
+              throw std::runtime_error("Maximum retries exceeded");
+            }
+          }
+        }
+        if (sealed) {
+          flush_page(std::cout, buffer.get_page(page));
+          buffer.clear_page(page);
+        }
       }
     }
-
-    flush_buffer(std::cout, &buffer);
   }
 
-  std::cerr << "\nDone." << std::endl;
+  std::cerr << "\rDone." << std::endl;
 }
 
 int main(int argc, char const* argv[]) {
   if (argc < 3) {
     std::cerr << "Usage: " << argv[0] << " <width>"
               << " <height>"
-              << " <samples>" << std::endl;
+              << " <samples>"
+              << " <threads>" << std::endl;
     return 1;
   }
 
   // image dimensions
   const int width = atoi(argv[1]);
   const int height = atoi(argv[2]);
-  const int samples = atoi(argv[3]);
+  const int samples = argc > 3 ? atoi(argv[3]) : 128;
+  const int threads = argc > 4 ? atoi(argv[4]) : 1;
   const auto aspect_ratio = double(width) / double(height);
-  const int max_depth = 50;
 
+  omp_set_num_threads(threads);
   // world
   auto world = random_scene();
 
@@ -146,7 +173,11 @@ int main(int argc, char const* argv[]) {
 
   camera cam(lookfrom, lookat, vup, 20, aspect_ratio, aperture, dist_to_focus);
 
-  render(width, height, cam, world, samples, max_depth);
+  try {
+    render(width, height, cam, world, samples, MAX_DEPTH);
+  } catch (const std::exception& e) {
+    std::cerr << "\n" << e.what() << std::endl;
+  }
 
   return 0;
 }
